@@ -1,0 +1,38 @@
+[project]
+name = "blom-ict"
+version = "0.1.0"
+description = "Blom-ICT-1.0"
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "hypothesis",
+    "pyright",
+    "pytest",
+    "ruff",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "C4", "RUF", "PT", "NPY", "PERF"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["tests"]
+pythonpath = ["python"]
+markers = [
+    "slow: long-running tests, excluded from the fast check",
+    "gpu: tests that need a CUDA GPU",
+]
+
+[tool.pyright]
+include = ["python", "tests"]
+pythonVersion = "3.13"
+typeCheckingMode = "standard"
