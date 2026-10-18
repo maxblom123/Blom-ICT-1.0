@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Rust
+target/
+
+# Data and run outputs: large and regenerable
+/data/
+/runs/
+*.pt
+*.safetensors
+*.gguf
+
+# Editors and OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Secrets
+.env
+.env.*
