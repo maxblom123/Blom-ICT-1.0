@@ -20,6 +20,8 @@ unimplemented = "deny"
 unwrap_used = "deny"
 expect_used = "warn"
 indexing_slicing = "warn"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 
