@@ -230,3 +230,50 @@ fn the_sketch_defaults_are_visible_in_the_help() {
     assert!(help.contains("4194301"), "{help}");
     assert!(help.contains("--part-dim"), "{help}");
 }
+
+#[test]
+fn sampling_goes_through_the_real_binary() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data.txt");
+    let out = dir.path().join("sub").join("sample.txt");
+    write_docs(&data, "User", 100);
+
+    let output = run(&[
+        &"sample",
+        &"--input",
+        &data,
+        &"--max-bytes",
+        &"500",
+        &"--out",
+        &out,
+    ]);
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let report = text(&output.stdout);
+    assert!(report.starts_with("sampled "), "{report}");
+    assert!(report.contains("rejected 0"), "{report}");
+    let sampled = fs::read_to_string(&out).unwrap();
+    assert!(sampled.starts_with("User: hello number 0"));
+    assert!(sampled.len() >= 500);
+    assert!(sampled.len() < 1_000);
+    assert!(sampled.ends_with("<|endoftext|>\n"));
+}
+
+#[test]
+fn sampling_with_a_zero_budget_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data.txt");
+    let out = dir.path().join("sample.txt");
+    write_docs(&data, "User", 10);
+    let output = run(&[
+        &"sample",
+        &"--input",
+        &data,
+        &"--max-bytes",
+        &"0",
+        &"--out",
+        &out,
+    ]);
+    assert!(!output.status.success());
+    assert!(text(&output.stderr).contains("above zero"));
+    assert!(!out.exists());
+}

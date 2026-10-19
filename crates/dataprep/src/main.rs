@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use dataprep::sample::sample;
 use dataprep::sketch::{SketchParams, build_sketch};
 use dataprep::{Error, commands};
 
@@ -33,6 +34,15 @@ enum Command {
         val: Vec<PathBuf>,
         #[arg(long, help = "Directory for train.bin, val.bin and meta.json")]
         out_dir: PathBuf,
+    },
+    #[command(about = "Copy whole documents from text files until a byte budget is reached")]
+    Sample {
+        #[arg(long, num_args = 1.., required = true, help = "Text files to sample from, in order")]
+        input: Vec<PathBuf>,
+        #[arg(long, help = "Stop after at least this many bytes")]
+        max_bytes: u64,
+        #[arg(long, help = "Where to write the sample")]
+        out: PathBuf,
     },
     #[command(about = "Build the frozen n-gram sketch table from the training shard")]
     BuildSketch {
@@ -96,6 +106,21 @@ fn run(cli: Cli) -> Result<(), Error> {
                     part.read.invalid_utf8_lines
                 );
             }
+        }
+        Command::Sample {
+            input,
+            max_bytes,
+            out,
+        } => {
+            let report = sample(input, max_bytes, &out)?;
+            println!(
+                "sampled {} documents, {} bytes to {} | rejected {} | invalid utf-8 lines {}",
+                report.documents,
+                report.bytes,
+                out.display(),
+                report.read.rejected_documents,
+                report.read.invalid_utf8_lines
+            );
         }
         Command::BuildSketch {
             data_dir,
