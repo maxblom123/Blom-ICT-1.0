@@ -3,7 +3,7 @@ name = "blom"
 version = "0.1.0"
 description = "Blom-ICT-1.0: model and training code"
 requires-python = ">=3.13"
-dependencies = ["torch==2.14.1"]
+dependencies = ["numpy>=2", "torch==2.14.1"]
 
 [build-system]
 requires = ["hatchling"]
