@@ -1,17 +1,20 @@
 [project]
-name = "blom-ict"
+name = "blom"
 version = "0.1.0"
-description = "Blom-ICT-1.0"
+description = "Blom-ICT-1.0: model and training code"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = ["torch==2.14.1"]
 
 [dependency-groups]
-dev = [
-    "hypothesis",
-    "pyright",
-    "pytest",
-    "ruff",
-]
+dev = ["hypothesis", "pyright", "pytest", "ruff"]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
 
 [tool.uv]
 package = false
@@ -27,10 +30,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "C4", "RUF", "PT", "NPY", "PERF"]
 addopts = "-ra --strict-markers --strict-config"
 testpaths = ["tests"]
 pythonpath = ["python"]
-markers = [
-    "slow: long-running tests, excluded from the fast check",
-    "gpu: tests that need a CUDA GPU",
-]
+markers = ["slow: ...", "gpu: ..."]
 
 [tool.pyright]
 include = ["python", "tests"]
