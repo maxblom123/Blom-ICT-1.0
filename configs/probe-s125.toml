@@ -1,0 +1,25 @@
+[model]
+vocab_size = 32000
+d_model = 768
+n_layer = 16
+n_head = 12
+n_kv_head = 4
+d_ff = 2048
+max_seq = 1024
+
+[train]
+batch_size = 2
+seq_len = 1024
+grad_accum = 4
+peak_lr = 6e-4
+min_lr = 6e-5
+warmup_steps = 100
+decay_steps = 200
+total_steps = 1000
+weight_decay = 0.1
+max_grad_norm = 1.0
+eval_every = 1000
+eval_batches = 10
+checkpoint_every = 1000
+log_every = 10
+seed = 0
