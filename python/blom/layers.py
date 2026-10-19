@@ -30,6 +30,37 @@ class RotaryEmbedding(nn.Module):
         return rotated.to(x.dtype)
 
 
+class KVCache:
+    def __init__(self, capacity: int) -> None:
+        if capacity <= 0:
+            raise ValueError(f"capacity must be positive, got {capacity}")
+        self.capacity = capacity
+        self.length = 0
+        self._k: Tensor | None = None
+        self._v: Tensor | None = None
+
+    def reset(self) -> None:
+        self.length = 0
+
+    def append(self, k: Tensor, v: Tensor) -> tuple[Tensor, Tensor]:
+        added = k.shape[2]
+        if self.length + added > self.capacity:
+            raise ValueError(
+                f"cache holds {self.capacity} positions, cannot add {added} after {self.length}"
+            )
+        if self._k is None or self._v is None:
+            shape = (k.shape[0], k.shape[1], self.capacity, k.shape[3])
+            self._k = k.new_empty(shape)
+            self._v = v.new_empty(shape)
+        elif self._k.shape[0] != k.shape[0]:
+            raise ValueError(f"cache has batch size {self._k.shape[0]}, got {k.shape[0]}")
+        end = self.length + added
+        self._k[:, :, self.length : end] = k
+        self._v[:, :, self.length : end] = v
+        self.length = end
+        return self._k[:, :, :end], self._v[:, :, :end]
+
+
 class Attention(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
@@ -47,15 +78,38 @@ class Attention(nn.Module):
             self.q_norm = nn.RMSNorm(self.head_dim, eps=config.norm_eps)
             self.k_norm = nn.RMSNorm(self.head_dim, eps=config.norm_eps)
 
-    def forward(self, x: Tensor, rope: RotaryEmbedding, offset: int = 0) -> Tensor:
+    def forward(
+        self,
+        x: Tensor,
+        rope: RotaryEmbedding,
+        offset: int = 0,
+        cache: KVCache | None = None,
+    ) -> Tensor:
         batch, seq, _ = x.shape
         q = self.q_proj(x).view(batch, seq, self.n_head, self.head_dim).transpose(1, 2)
         k = self.k_proj(x).view(batch, seq, self.n_kv_head, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(batch, seq, self.n_kv_head, self.head_dim).transpose(1, 2)
+        if cache is not None:
+            offset = cache.length
         q = rope(self.q_norm(q), offset)
         k = rope(self.k_norm(k), offset)
+        is_causal = True
+        mask: Tensor | None = None
+        if cache is not None:
+            past = cache.length
+            k, v = cache.append(k, v)
+            if past > 0:
+                is_causal = False
+                if seq > 1:
+                    mask = torch.ones(seq, past + seq, dtype=torch.bool, device=x.device)
+                    mask = mask.tril(diagonal=past)
         y = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, enable_gqa=self.n_kv_head != self.n_head
+            q,
+            k,
+            v,
+            attn_mask=mask,
+            is_causal=is_causal,
+            enable_gqa=self.n_kv_head != self.n_head,
         )
         return self.o_proj(y.transpose(1, 2).reshape(batch, seq, -1))
 
@@ -79,6 +133,12 @@ class Block(nn.Module):
         self.mlp_norm = nn.RMSNorm(config.d_model, eps=config.norm_eps)
         self.mlp = SwiGLU(config)
 
-    def forward(self, x: Tensor, rope: RotaryEmbedding, offset: int = 0) -> Tensor:
-        x = x + self.attn(self.attn_norm(x), rope, offset)
+    def forward(
+        self,
+        x: Tensor,
+        rope: RotaryEmbedding,
+        offset: int = 0,
+        cache: KVCache | None = None,
+    ) -> Tensor:
+        x = x + self.attn(self.attn_norm(x), rope, offset, cache)
         return x + self.mlp(self.mlp_norm(x))

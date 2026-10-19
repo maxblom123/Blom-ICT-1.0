@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from blom.config import ModelConfig
-from blom.layers import Block, RotaryEmbedding
+from blom.layers import Block, KVCache, RotaryEmbedding
 
 INIT_STD = 0.02
 IGNORE_INDEX = -100
@@ -33,14 +33,22 @@ class GPT(nn.Module):
                 nn.init.normal_(module.attn.o_proj.weight, mean=0.0, std=residual_std)
                 nn.init.normal_(module.mlp.down_proj.weight, mean=0.0, std=residual_std)
 
-    def forward(self, tokens: Tensor) -> Tensor:
+    def new_caches(self) -> list[KVCache]:
+        return [KVCache(self.config.max_seq) for _ in self.blocks]
+
+    def forward(self, tokens: Tensor, caches: list[KVCache] | None = None) -> Tensor:
         if tokens.ndim != 2:
             raise ValueError(f"tokens must be (batch, seq), got shape {tuple(tokens.shape)}")
-        if tokens.shape[1] > self.config.max_seq:
-            raise ValueError(f"sequence length {tokens.shape[1]} exceeds {self.config.max_seq}")
+        if caches is not None and len(caches) != len(self.blocks):
+            raise ValueError(f"expected {len(self.blocks)} caches, got {len(caches)}")
+        start = 0 if caches is None else caches[0].length
+        if start + tokens.shape[1] > self.config.max_seq:
+            raise ValueError(
+                f"sequence length {start + tokens.shape[1]} exceeds {self.config.max_seq}"
+            )
         x = self.tok(tokens)
-        for block in self.blocks:
-            x = block(x, self.rope)
+        for index, block in enumerate(self.blocks):
+            x = block(x, self.rope, 0, None if caches is None else caches[index])
         return self.lm_head(self.norm(x))
 
 
