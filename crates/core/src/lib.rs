@@ -1,3 +1,5 @@
+pub mod hash;
+
 pub const SPECIAL_TOKENS: [&str; 3] = ["<|endoftext|>", "<|im_start|>", "<|im_end|>"];
 
 #[cfg(test)]
