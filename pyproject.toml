@@ -5,6 +5,13 @@ description = "Blom-ICT-1.0: model and training code"
 requires-python = ">=3.13"
 dependencies = ["torch==2.14.1"]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["python/blom"]
+
 [dependency-groups]
 dev = ["hypothesis", "pyright", "pytest", "ruff"]
 
@@ -16,12 +23,10 @@ explicit = true
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu130", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
 
-[tool.uv]
-package = false
-
 [tool.ruff]
 line-length = 100
 target-version = "py313"
+src = ["python", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "C4", "RUF", "PT", "NPY", "PERF"]
@@ -29,7 +34,6 @@ select = ["E", "F", "I", "B", "UP", "SIM", "C4", "RUF", "PT", "NPY", "PERF"]
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --strict-config"
 testpaths = ["tests"]
-pythonpath = ["python"]
 markers = ["slow: ...", "gpu: ..."]
 
 [tool.pyright]
