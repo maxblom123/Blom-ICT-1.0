@@ -1,3 +1,4 @@
+pub mod corpus;
 pub mod docs;
 pub mod shards;
 pub mod tokenizer;
