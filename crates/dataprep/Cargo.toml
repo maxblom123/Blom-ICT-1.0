@@ -1,0 +1,12 @@
+[package]
+name = "dataprep"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+blom_core = { package = "core", path = "../core" }
+
+[lints]
+workspace = true
