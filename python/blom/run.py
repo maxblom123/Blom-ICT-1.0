@@ -4,7 +4,7 @@ import math
 import sys
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import torch
@@ -12,6 +12,7 @@ import torch
 from blom.checkpoint import CheckpointError, load_checkpoint, restore, save_checkpoint
 from blom.config import ConfigError, ModelConfig
 from blom.data import DataError, Dataset
+from blom.memory import SketchError, SketchReader
 from blom.model import GPT
 from blom.optim import build_optimizer
 from blom.train import TrainError, evaluate, train_step
@@ -40,8 +41,17 @@ def resolve_device(name: str) -> torch.device:
     return torch.device(name)
 
 
-def check_run_config(out_dir: Path, model_config: ModelConfig, train_config: TrainConfig) -> None:
-    description = {"model": asdict(model_config), "train": asdict(train_config)}
+def check_run_config(
+    out_dir: Path,
+    model_config: ModelConfig,
+    train_config: TrainConfig,
+    memory: dict[str, object] | None = None,
+) -> None:
+    description = {
+        "model": asdict(model_config),
+        "train": asdict(train_config),
+        "memory": memory,
+    }
     path = out_dir / RUN_NAME
     if not path.exists():
         path.write_text(json.dumps(description, indent=2), encoding="utf-8")
@@ -70,6 +80,7 @@ def run(
     amp: bool,
     log: Log,
     until: int | None = None,
+    sketch_dir: Path | None = None,
 ) -> RunResult:
     end = train_config.total_steps if until is None else until
     if not 0 < end <= train_config.total_steps:
@@ -79,8 +90,21 @@ def run(
             f"seq_len {train_config.seq_len} exceeds the model's max_seq {model_config.max_seq}"
         )
     dataset = Dataset.open(data_dir, expected_vocab=model_config.vocab_size)
+    reader: SketchReader | None = None
+    if sketch_dir is None:
+        if model_config.memory_dim:
+            raise TrainError("the model config asks for memory but no --sketch was given")
+    else:
+        reader = SketchReader(sketch_dir)
+        reader.check_dataset(dataset)
+        model_config = replace(
+            model_config,
+            memory_dim=reader.feature_dim,
+            memory_scale=math.sqrt(reader.part_dim),
+        )
+    fingerprint = None if reader is None else reader.fingerprint()
     out_dir.mkdir(parents=True, exist_ok=True)
-    check_run_config(out_dir, model_config, train_config)
+    check_run_config(out_dir, model_config, train_config, fingerprint)
     if device.type == "cuda":
         torch.set_float32_matmul_precision("high")
     torch.manual_seed(train_config.seed)
@@ -98,6 +122,7 @@ def run(
             "gpu": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
             "amp": amp,
             "parameters": model_config.param_count,
+            "memory": fingerprint,
             "tokens_per_step": train_config.tokens_per_step,
             "total_steps": train_config.total_steps,
             "until": end,
@@ -107,6 +132,8 @@ def run(
     start = 0
     if checkpoint_path.exists():
         checkpoint = load_checkpoint(checkpoint_path, map_location=device)
+        if checkpoint.memory != fingerprint:
+            raise TrainError("the checkpoint was trained with a different sketch")
         start = restore(checkpoint, model=model, optimizer=optimizer)
         log({"event": "resume", "step": start})
     if start >= end:
@@ -120,7 +147,14 @@ def run(
     for step in range(start, end):
         began = time.perf_counter()
         stats = train_step(
-            model, optimizer, dataset.train, train_config, step=step, device=device, amp=amp
+            model,
+            optimizer,
+            dataset.train,
+            train_config,
+            step=step,
+            device=device,
+            amp=amp,
+            memory=reader,
         )
         window_seconds += time.perf_counter() - began
         window_tokens += stats.tokens
@@ -142,12 +176,20 @@ def run(
             window_tokens = 0
             window_seconds = 0.0
         if completed % train_config.eval_every == 0 or last:
-            val_loss = evaluate(model, dataset.val, train_config, device=device, amp=amp)
+            val_loss = evaluate(
+                model, dataset.val, train_config, device=device, amp=amp, memory=reader
+            )
             if not math.isfinite(val_loss):
                 raise TrainError(f"validation loss is {val_loss} at step {completed}")
             log({"event": "eval", "step": completed, "val_loss": round(val_loss, 4)})
         if completed % train_config.checkpoint_every == 0 or last:
-            save_checkpoint(checkpoint_path, model=model, optimizer=optimizer, step=completed)
+            save_checkpoint(
+                checkpoint_path,
+                model=model,
+                optimizer=optimizer,
+                step=completed,
+                memory=fingerprint,
+            )
             log({"event": "checkpoint", "step": completed})
     return RunResult(step=end, train_loss=train_loss, val_loss=val_loss)
 
@@ -158,6 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data", type=Path, required=True, help="directory made by dataprep")
     parser.add_argument("--out", type=Path, required=True, help="run directory")
     parser.add_argument("--until", type=int, help="stop after this global step")
+    parser.add_argument("--sketch", type=Path, help="directory made by dataprep build-sketch")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=None)
     return parser
@@ -188,6 +231,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 amp=amp,
                 log=log,
                 until=args.until,
+                sketch_dir=args.sketch,
             )
     except (
         ConfigError,
@@ -195,6 +239,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         DataError,
         CheckpointError,
         TrainError,
+        SketchError,
         OSError,
     ) as error:
         print(f"error: {error}", file=sys.stderr)

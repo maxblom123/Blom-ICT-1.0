@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from blom.config import ModelConfig
-from blom.layers import Block, KVCache, RotaryEmbedding
+from blom.layers import Block, KVCache, MemoryInject, RotaryEmbedding
 
 INIT_STD = 0.02
 IGNORE_INDEX = -100
@@ -19,6 +19,9 @@ class GPT(nn.Module):
         self.blocks = nn.ModuleList(Block(config) for _ in range(config.n_layer))
         self.norm = nn.RMSNorm(config.d_model, eps=config.norm_eps)
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
+        self.memory: MemoryInject | None = None
+        if config.memory_dim:
+            self.memory = MemoryInject(config.d_model, config.memory_dim, config.memory_scale)
         self._init_weights()
         if config.tie_embeddings:
             self.lm_head.weight = self.tok.weight
@@ -36,9 +39,19 @@ class GPT(nn.Module):
     def new_caches(self) -> list[KVCache]:
         return [KVCache(self.config.max_seq) for _ in self.blocks]
 
-    def forward(self, tokens: Tensor, caches: list[KVCache] | None = None) -> Tensor:
+    def forward(
+        self, tokens: Tensor, caches: list[KVCache] | None = None, mem: Tensor | None = None
+    ) -> Tensor:
         if tokens.ndim != 2:
             raise ValueError(f"tokens must be (batch, seq), got shape {tuple(tokens.shape)}")
+        if self.memory is None and mem is not None:
+            raise ValueError("this model has no memory, so mem must be None")
+        if self.memory is not None:
+            if mem is None:
+                raise ValueError("this model needs memory features (mem)")
+            expected = (*tokens.shape, self.config.memory_dim)
+            if tuple(mem.shape) != expected:
+                raise ValueError(f"mem must have shape {expected}, got {tuple(mem.shape)}")
         if caches is not None and len(caches) != len(self.blocks):
             raise ValueError(f"expected {len(self.blocks)} caches, got {len(caches)}")
         start = 0 if caches is None else caches[0].length
@@ -49,6 +62,8 @@ class GPT(nn.Module):
         x = self.tok(tokens)
         for index, block in enumerate(self.blocks):
             x = block(x, self.rope, 0, None if caches is None else caches[index])
+            if self.memory is not None and mem is not None and index == self.config.memory_layer:
+                x = x + self.memory(x, mem)
         return self.lm_head(self.norm(x))
 
 

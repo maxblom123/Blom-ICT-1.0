@@ -50,14 +50,18 @@ def _pair(rows: list[np.ndarray]) -> tuple[Tensor, Tensor]:
     return batch[:, :-1].contiguous(), batch[:, 1:].contiguous()
 
 
-def train_batch(
-    shard: Shard, *, batch_size: int, seq_len: int, seed: int, step: int
-) -> tuple[Tensor, Tensor]:
+def train_starts(shard: Shard, *, batch_size: int, seq_len: int, seed: int, step: int) -> list[int]:
     if len(shard) < seq_len + 1:
         raise DataError(f"shard has {len(shard)} tokens, need at least {seq_len + 1}")
     rng = np.random.default_rng((seed, step))
-    starts = rng.integers(0, len(shard) - seq_len, size=batch_size)
-    return _pair([shard.window(int(start), seq_len + 1) for start in starts])
+    return [int(start) for start in rng.integers(0, len(shard) - seq_len, size=batch_size)]
+
+
+def train_batch(
+    shard: Shard, *, batch_size: int, seq_len: int, seed: int, step: int
+) -> tuple[Tensor, Tensor]:
+    starts = train_starts(shard, batch_size=batch_size, seq_len=seq_len, seed=seed, step=step)
+    return _pair([shard.window(start, seq_len + 1) for start in starts])
 
 
 def eval_batches(shard: Shard, *, batch_size: int, seq_len: int) -> Iterator[tuple[Tensor, Tensor]]:

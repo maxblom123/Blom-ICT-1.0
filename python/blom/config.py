@@ -22,6 +22,9 @@ class ModelConfig:
     norm_eps: float = 1e-6
     qk_norm: bool = True
     tie_embeddings: bool = True
+    memory_dim: int = 0
+    memory_scale: float = 1.0
+    memory_layer: int = 0
 
     def __post_init__(self) -> None:
         hints = typing.get_type_hints(type(self))
@@ -32,6 +35,14 @@ class ModelConfig:
                 raise ConfigError(f"{name} must be positive, got {getattr(self, name)}")
         if self.rope_theta <= 0 or self.norm_eps <= 0:
             raise ConfigError("rope_theta and norm_eps must be positive")
+        if self.memory_dim < 0:
+            raise ConfigError(f"memory_dim must not be negative, got {self.memory_dim}")
+        if self.memory_scale <= 0:
+            raise ConfigError(f"memory_scale must be positive, got {self.memory_scale}")
+        if not 0 <= self.memory_layer < self.n_layer:
+            raise ConfigError(
+                f"memory_layer must be in 0..{self.n_layer - 1}, got {self.memory_layer}"
+            )
         if self.d_model % self.n_head != 0:
             raise ConfigError(f"d_model {self.d_model} must be divisible by n_head {self.n_head}")
         if self.head_dim % 2 != 0:
@@ -70,6 +81,8 @@ class ModelConfig:
         total = self.vocab_size * d + self.n_layer * block + d
         if not self.tie_embeddings:
             total += self.vocab_size * d
+        if self.memory_dim:
+            total += self.memory_dim * d + d + 1
         return total
 
     @classmethod

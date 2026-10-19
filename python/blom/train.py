@@ -1,11 +1,14 @@
 import math
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import torch
+from torch import Tensor
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import AdamW
 
 from blom.data import Shard, eval_batches, train_batch
+from blom.memory import SketchReader, eval_batches_with_memory, train_batch_with_memory
 from blom.model import GPT, next_token_loss
 from blom.optim import set_lr
 from blom.train_config import TrainConfig
@@ -28,6 +31,42 @@ def autocast(device: torch.device, enabled: bool) -> torch.autocast:
     return torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=enabled)
 
 
+def _train_batch(
+    shard: Shard, config: TrainConfig, memory: SketchReader | None, step: int
+) -> tuple[Tensor, Tensor, Tensor | None]:
+    if memory is None:
+        inputs, targets = train_batch(
+            shard,
+            batch_size=config.batch_size,
+            seq_len=config.seq_len,
+            seed=config.seed,
+            step=step,
+        )
+        return inputs, targets, None
+    return train_batch_with_memory(
+        shard,
+        memory,
+        batch_size=config.batch_size,
+        seq_len=config.seq_len,
+        seed=config.seed,
+        step=step,
+    )
+
+
+def _eval_batches(
+    shard: Shard, config: TrainConfig, memory: SketchReader | None
+) -> Iterator[tuple[Tensor, Tensor, Tensor | None]]:
+    if memory is None:
+        for inputs, targets in eval_batches(
+            shard, batch_size=config.batch_size, seq_len=config.seq_len
+        ):
+            yield inputs, targets, None
+    else:
+        yield from eval_batches_with_memory(
+            shard, memory, batch_size=config.batch_size, seq_len=config.seq_len
+        )
+
+
 def train_step(
     model: GPT,
     optimizer: AdamW,
@@ -37,6 +76,7 @@ def train_step(
     step: int,
     device: torch.device,
     amp: bool = False,
+    memory: SketchReader | None = None,
 ) -> StepStats:
     lr = config.schedule.lr_at(step)
     set_lr(optimizer, lr)
@@ -44,17 +84,12 @@ def train_step(
     optimizer.zero_grad(set_to_none=True)
     total = torch.zeros((), device=device)
     for micro in range(config.grad_accum):
-        inputs, targets = train_batch(
-            shard,
-            batch_size=config.batch_size,
-            seq_len=config.seq_len,
-            seed=config.seed,
-            step=step * config.grad_accum + micro,
-        )
+        inputs, targets, mem = _train_batch(shard, config, memory, step * config.grad_accum + micro)
         inputs = inputs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
+        mem = None if mem is None else mem.to(device, non_blocking=True)
         with autocast(device, amp):
-            logits = model(inputs)
+            logits = model(inputs, mem=mem)
         loss = next_token_loss(logits, targets) / config.grad_accum
         loss.backward()
         total += loss.detach()
@@ -81,6 +116,7 @@ def evaluate(
     *,
     device: torch.device,
     amp: bool = False,
+    memory: SketchReader | None = None,
 ) -> float:
     was_training = model.training
     model.eval()
@@ -88,14 +124,14 @@ def evaluate(
     count = 0
     try:
         with torch.no_grad():
-            batches = eval_batches(shard, batch_size=config.batch_size, seq_len=config.seq_len)
-            for index, (inputs, targets) in enumerate(batches):
+            for index, (inputs, targets, mem) in enumerate(_eval_batches(shard, config, memory)):
                 if index >= config.eval_batches:
                     break
                 inputs = inputs.to(device, non_blocking=True)
                 targets = targets.to(device, non_blocking=True)
+                mem = None if mem is None else mem.to(device, non_blocking=True)
                 with autocast(device, amp):
-                    logits = model(inputs)
+                    logits = model(inputs, mem=mem)
                 total += float(next_token_loss(logits, targets)) * targets.numel()
                 count += targets.numel()
     finally:

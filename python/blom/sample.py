@@ -88,6 +88,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"the tokenizer has {tokenizer.get_vocab_size()} tokens, "
                 f"the model expects {checkpoint.config.vocab_size}"
             )
+        if checkpoint.config.memory_dim:
+            raise GenerationError(
+                "this checkpoint uses sketch memory, and sampling with memory is not supported yet"
+            )
         model = GPT(checkpoint.config).to(device)
         step = restore(checkpoint, model=model)
         print(f"[step {step} on {device}]", file=sys.stderr)

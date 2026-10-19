@@ -125,6 +125,17 @@ class SwiGLU(nn.Module):
         return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
 
 
+class MemoryInject(nn.Module):
+    def __init__(self, d_model: int, memory_dim: int, scale: float) -> None:
+        super().__init__()
+        self.scale = scale
+        self.proj = nn.Linear(memory_dim, d_model, bias=False)
+        self.gate = nn.Linear(d_model, 1)
+
+    def forward(self, x: Tensor, mem: Tensor) -> Tensor:
+        return torch.sigmoid(self.gate(x)) * self.proj(mem.to(x.dtype) * self.scale)
+
+
 class Block(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()

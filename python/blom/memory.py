@@ -1,12 +1,14 @@
 import argparse
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import numpy as np
+import torch
+from torch import Tensor
 
-from blom.data import DataError, Dataset, Shard
+from blom.data import DataError, Dataset, Shard, train_starts
 
 FORMAT = "sketch-v1"
 ABSENT = -1
@@ -172,6 +174,18 @@ class SketchReader:
     def feature_dim(self) -> int:
         return self.lookups * self.part_dim
 
+    def fingerprint(self) -> dict[str, object]:
+        return {
+            "seed": self.seed,
+            "rows": self.rows,
+            "orders": list(self.orders),
+            "hashes": self.n_hash,
+            "part_dim": self.part_dim,
+            "vocab_size": self.vocab_size,
+            "pairs": self.pairs,
+            "source_tokens": self.source_tokens,
+        }
+
     def check_dataset(self, dataset: Dataset) -> None:
         if dataset.vocab_size != self.vocab_size:
             raise SketchError(
@@ -203,6 +217,45 @@ class SketchReader:
                 )
         features = sums / (counts[:, :, :, None] + 1.0)
         return features.reshape(batch, positions, lookups * self.part_dim)
+
+
+def _batch_with_memory(
+    shard: Shard,
+    reader: SketchReader,
+    starts: Sequence[int],
+    seq_len: int,
+    *,
+    leave_one_out: bool,
+) -> tuple[Tensor, Tensor, Tensor]:
+    history = reader.history
+    ext = np.stack([window_with_history(shard, start, seq_len + 1, history) for start in starts])
+    window = ext[:, history:]
+    targets = window[:, 1:]
+    mem = reader.features(ext[:, :-1], targets=targets if leave_one_out else None)
+    return (
+        torch.from_numpy(np.ascontiguousarray(window[:, :-1])),
+        torch.from_numpy(np.ascontiguousarray(targets)),
+        torch.from_numpy(mem),
+    )
+
+
+def train_batch_with_memory(
+    shard: Shard, reader: SketchReader, *, batch_size: int, seq_len: int, seed: int, step: int
+) -> tuple[Tensor, Tensor, Tensor]:
+    starts = train_starts(shard, batch_size=batch_size, seq_len=seq_len, seed=seed, step=step)
+    return _batch_with_memory(shard, reader, starts, seq_len, leave_one_out=True)
+
+
+def eval_batches_with_memory(
+    shard: Shard, reader: SketchReader, *, batch_size: int, seq_len: int
+) -> Iterator[tuple[Tensor, Tensor, Tensor]]:
+    windows = (len(shard) - 1) // seq_len
+    if windows == 0:
+        raise DataError(f"shard has {len(shard)} tokens, need at least {seq_len + 1}")
+    for first in range(0, windows, batch_size):
+        last = min(first + batch_size, windows)
+        starts = [index * seq_len for index in range(first, last)]
+        yield _batch_with_memory(shard, reader, starts, seq_len, leave_one_out=False)
 
 
 def verify(
