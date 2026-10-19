@@ -166,6 +166,7 @@ name = "dataprep"
 version = "0.1.0"
 dependencies = [
  "core",
+ "serde_json",
  "tempfile",
  "tokenizers",
 ]

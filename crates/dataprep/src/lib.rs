@@ -1,3 +1,4 @@
+pub mod commands;
 pub mod corpus;
 pub mod docs;
 pub mod shards;
