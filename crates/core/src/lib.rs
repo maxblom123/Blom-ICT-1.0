@@ -1,5 +1,6 @@
 pub mod chat;
 pub mod hash;
+pub mod sketch;
 
 pub const SPECIAL_TOKENS: [&str; 3] = ["<|endoftext|>", "<|im_start|>", "<|im_end|>"];
 

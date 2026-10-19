@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use dataprep::sketch::{SketchParams, build_sketch};
 use dataprep::{Error, commands};
 
 #[derive(Parser)]
@@ -32,6 +33,27 @@ enum Command {
         val: Vec<PathBuf>,
         #[arg(long, help = "Directory for train.bin, val.bin and meta.json")]
         out_dir: PathBuf,
+    },
+    #[command(about = "Build the frozen n-gram sketch table from the training shard")]
+    BuildSketch {
+        #[arg(long, help = "Directory with train.bin and meta.json")]
+        data_dir: PathBuf,
+        #[arg(long, help = "Directory for the sketch files")]
+        out_dir: PathBuf,
+        #[arg(long, default_value_t = 4_194_301, help = "Rows in the table")]
+        rows: u64,
+        #[arg(long, num_args = 1.., default_values_t = [2_usize, 3], help = "N-gram orders")]
+        orders: Vec<usize>,
+        #[arg(long, default_value_t = 2, help = "Hash functions per order")]
+        hashes: usize,
+        #[arg(long, default_value_t = 32, help = "Width of one stored vector")]
+        part_dim: usize,
+        #[arg(
+            long,
+            default_value_t = 20_261_016,
+            help = "Seed for hashes and projection"
+        )]
+        seed: u64,
     },
     #[command(about = "Decode the first tokens of a shard back to text")]
     Peek {
@@ -74,6 +96,36 @@ fn run(cli: Cli) -> Result<(), Error> {
                     part.read.invalid_utf8_lines
                 );
             }
+        }
+        Command::BuildSketch {
+            data_dir,
+            out_dir,
+            rows,
+            orders,
+            hashes,
+            part_dim,
+            seed,
+        } => {
+            let params = SketchParams {
+                seed,
+                rows,
+                orders,
+                n_hash: hashes,
+                part_dim,
+            };
+            let report = build_sketch(&data_dir, &out_dir, &params)?;
+            let permille = u128::from(report.rows_used) * 1000 / u128::from(report.rows.max(1));
+            println!("sketch written to {}", out_dir.display());
+            println!(
+                "pairs {} | lookups {} | rows used {} of {} ({}.{}%) | max count {}",
+                report.pairs,
+                report.lookups,
+                report.rows_used,
+                report.rows,
+                permille / 10,
+                permille % 10,
+                report.max_count
+            );
         }
         Command::Peek {
             tokenizer,

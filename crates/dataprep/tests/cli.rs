@@ -133,3 +133,100 @@ fn missing_arguments_are_a_usage_error() {
     assert!(!output.status.success());
     assert!(text(&output.stderr).contains("--tokenizer"));
 }
+
+#[test]
+fn the_sketch_is_built_through_the_real_binary() {
+    let dir = tempfile::tempdir().unwrap();
+    let train = dir.path().join("train.txt");
+    let val = dir.path().join("val.txt");
+    let tok_file = dir.path().join("tokenizer.json");
+    let data = dir.path().join("data");
+    let sketch = dir.path().join("sketch");
+    write_docs(&train, "User", 200);
+    write_docs(&val, "Visitor", 20);
+
+    let made = run(&[
+        &"train-tokenizer",
+        &"--vocab-size",
+        &"400",
+        &"--input",
+        &train,
+        &"--out",
+        &tok_file,
+    ]);
+    assert!(made.status.success(), "{}", text(&made.stderr));
+    let tokenized = run(&[
+        &"tokenize",
+        &"--tokenizer",
+        &tok_file,
+        &"--train",
+        &train,
+        &"--val",
+        &val,
+        &"--out-dir",
+        &data,
+    ]);
+    assert!(tokenized.status.success(), "{}", text(&tokenized.stderr));
+
+    let built = run(&[
+        &"build-sketch",
+        &"--data-dir",
+        &data,
+        &"--out-dir",
+        &sketch,
+        &"--rows",
+        &"1009",
+        &"--orders",
+        &"2",
+        &"3",
+        &"--hashes",
+        &"2",
+        &"--part-dim",
+        &"4",
+    ]);
+    assert!(built.status.success(), "{}", text(&built.stderr));
+    let report = text(&built.stdout);
+    assert!(report.contains("sketch written to"), "{report}");
+    assert!(report.contains("lookups 4"), "{report}");
+    assert!(report.contains("of 1009"), "{report}");
+
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(sketch.join("sketch.json")).unwrap()).unwrap();
+    assert_eq!(manifest["format"], "sketch-v1");
+    assert_eq!(manifest["rows"], 1009);
+    assert_eq!(manifest["part_dim"], 4);
+    let vocab = manifest["vocab_size"].as_u64().unwrap();
+    assert_eq!(
+        fs::metadata(sketch.join("sums.f32")).unwrap().len(),
+        1009 * 4 * 4
+    );
+    assert_eq!(
+        fs::metadata(sketch.join("counts.u32")).unwrap().len(),
+        1009 * 4
+    );
+    assert_eq!(
+        fs::metadata(sketch.join("projection.f32")).unwrap().len(),
+        vocab * 4 * 4
+    );
+}
+
+#[test]
+fn building_a_sketch_without_data_fails_with_a_clear_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("nothing");
+    let out = dir.path().join("sketch");
+    let output = run(&[&"build-sketch", &"--data-dir", &missing, &"--out-dir", &out]);
+    assert!(!output.status.success());
+    assert!(text(&output.stderr).starts_with("error: "));
+    assert!(text(&output.stderr).contains("meta.json"));
+    assert!(!out.exists());
+}
+
+#[test]
+fn the_sketch_defaults_are_visible_in_the_help() {
+    let output = run(&[&"build-sketch", &"--help"]);
+    let help = text(&output.stdout);
+    assert!(output.status.success());
+    assert!(help.contains("4194301"), "{help}");
+    assert!(help.contains("--part-dim"), "{help}");
+}
