@@ -1,0 +1,22 @@
+# Full fine-tuning run for a rented GPU (python -m blom.sft), meant for ALL the chat data.
+# 50,000 steps x 65,536 tokens = 3.3B tokens, about one pass over everything.
+# After tokenize-chat, set total_steps to (train tokens printed there) / 65,536 for exactly
+# one pass, and keep warmup_steps + decay_steps <= total_steps.
+# batch_size x grad_accum x seq_len = 65,536 tokens per step; lower batch_size and raise
+# grad_accum if the GPU runs out of memory. seq_len must not exceed the model's max_seq.
+[train]
+batch_size = 16
+grad_accum = 4
+seq_len = 1024
+peak_lr = 1e-4
+min_lr = 1e-5
+warmup_steps = 300
+decay_steps = 38000
+total_steps = 50000
+weight_decay = 0.1
+max_grad_norm = 1.0
+eval_every = 2500
+eval_batches = 25
+checkpoint_every = 2500
+log_every = 50
+seed = 0

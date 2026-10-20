@@ -52,12 +52,12 @@ pub fn train_tokenizer(
     Ok((result?, corpus.stats()))
 }
 
-fn load_tokenizer(path: &Path) -> Result<Tokenizer, Error> {
+pub(crate) fn load_tokenizer(path: &Path) -> Result<Tokenizer, Error> {
     Tokenizer::from_file(path)
         .map_err(|error| format!("cannot load tokenizer {}: {error}", path.display()).into())
 }
 
-fn ensure_disjoint(train: &[PathBuf], val: &[PathBuf]) -> Result<(), Error> {
+pub(crate) fn ensure_disjoint(train: &[PathBuf], val: &[PathBuf]) -> Result<(), Error> {
     let mut seen = HashSet::new();
     for path in train {
         seen.insert(fs::canonicalize(path)?);

@@ -277,3 +277,126 @@ fn sampling_with_a_zero_budget_is_refused() {
     assert!(text(&output.stderr).contains("above zero"));
     assert!(!out.exists());
 }
+
+fn write_chats(path: &Path, tag: &str, count: usize) {
+    let lines: Vec<String> = (0..count)
+        .map(|i| {
+            serde_json::json!({"messages": [
+                {"role": "user", "content": format!("{tag}: hello number {i}, how are you today?")},
+                {"role": "assistant", "content": format!("I am fine, thank you for asking about number {i}.")},
+            ]})
+            .to_string()
+        })
+        .collect();
+    fs::write(path, lines.join("\n") + "\n").expect("failed to write chat data");
+}
+
+#[test]
+fn chat_pipeline_through_the_real_binary() {
+    let dir = tempfile::tempdir().unwrap();
+    let text_file = dir.path().join("text.txt");
+    let train = dir.path().join("sft_train.jsonl");
+    let val = dir.path().join("sft_valid.jsonl");
+    let tok_file = dir.path().join("tokenizer.json");
+    let out = dir.path().join("out");
+    write_docs(&text_file, "User", 200);
+    write_chats(&train, "t", 100);
+    write_chats(&val, "v", 10);
+
+    let made = run(&[
+        &"train-tokenizer",
+        &"--vocab-size",
+        &"400",
+        &"--input",
+        &text_file,
+        &"--out",
+        &tok_file,
+    ]);
+    assert!(made.status.success(), "{}", text(&made.stderr));
+
+    let tokenized = run(&[
+        &"tokenize-chat",
+        &"--tokenizer",
+        &tok_file,
+        &"--train",
+        &train,
+        &"--val",
+        &val,
+        &"--keep",
+        &"sft_train=100",
+        &"--out-dir",
+        &out,
+    ]);
+    assert!(tokenized.status.success(), "{}", text(&tokenized.stderr));
+    let report = text(&tokenized.stdout);
+    assert!(report.contains("train: 100 conversations"), "{report}");
+    assert!(report.contains("val: 10 conversations"), "{report}");
+    for name in [
+        "train.bin",
+        "train.mask",
+        "val.bin",
+        "val.mask",
+        "meta.json",
+    ] {
+        assert!(out.join(name).is_file(), "{name}");
+    }
+
+    let peeked = run(&[
+        &"peek",
+        &"--tokenizer",
+        &tok_file,
+        &"--shard",
+        &out.join("train.bin"),
+        &"--mask",
+        &out.join("train.mask"),
+        &"--tokens",
+        &"40",
+    ]);
+    assert!(peeked.status.success(), "{}", text(&peeked.stderr));
+    let shown = text(&peeked.stdout);
+    assert!(
+        shown.starts_with("<|im_start|>user\nt: hello number 0"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("<|im_start|>assistant\n[[[I am fine"),
+        "{shown}"
+    );
+}
+
+#[test]
+fn a_keep_rule_for_an_unknown_file_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let text_file = dir.path().join("text.txt");
+    let train = dir.path().join("a_train.jsonl");
+    let val = dir.path().join("a_valid.jsonl");
+    let tok_file = dir.path().join("tokenizer.json");
+    write_docs(&text_file, "User", 50);
+    write_chats(&train, "t", 10);
+    write_chats(&val, "v", 5);
+    let made = run(&[
+        &"train-tokenizer",
+        &"--vocab-size",
+        &"400",
+        &"--input",
+        &text_file,
+        &"--out",
+        &tok_file,
+    ]);
+    assert!(made.status.success(), "{}", text(&made.stderr));
+    let output = run(&[
+        &"tokenize-chat",
+        &"--tokenizer",
+        &tok_file,
+        &"--train",
+        &train,
+        &"--val",
+        &val,
+        &"--keep",
+        &"b_train=50",
+        &"--out-dir",
+        &dir.path().join("out"),
+    ]);
+    assert!(!output.status.success());
+    assert!(text(&output.stderr).contains("b_train"));
+}

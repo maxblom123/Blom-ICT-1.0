@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use dataprep::chat::{self, Keep};
 use dataprep::sample::sample;
 use dataprep::sketch::{SketchParams, build_sketch};
 use dataprep::{Error, commands};
@@ -33,6 +34,29 @@ enum Command {
         #[arg(long, num_args = 1.., required = true, help = "Validation text files")]
         val: Vec<PathBuf>,
         #[arg(long, help = "Directory for train.bin, val.bin and meta.json")]
+        out_dir: PathBuf,
+    },
+    #[command(
+        about = "Turn chat jsonl files into token shards plus a loss mask (assistant text only)"
+    )]
+    TokenizeChat {
+        #[arg(long, help = "Path to tokenizer.json")]
+        tokenizer: PathBuf,
+        #[arg(long, num_args = 1.., required = true, help = "Training jsonl files")]
+        train: Vec<PathBuf>,
+        #[arg(long, num_args = 1.., required = true, help = "Validation jsonl files")]
+        val: Vec<PathBuf>,
+        #[arg(
+            long,
+            num_args = 1..,
+            value_parser = Keep::parse,
+            help = "Keep only PERCENT of a file's conversations: FILE_STEM=PERCENT"
+        )]
+        keep: Vec<Keep>,
+        #[arg(
+            long,
+            help = "Directory for train.bin, train.mask, val.bin, val.mask and meta.json"
+        )]
         out_dir: PathBuf,
     },
     #[command(about = "Copy whole documents from text files until a byte budget is reached")]
@@ -73,7 +97,22 @@ enum Command {
         shard: PathBuf,
         #[arg(long, default_value_t = 200, help = "How many tokens to show")]
         tokens: usize,
+        #[arg(long, help = "Mask shard: wrap the trained spans in [[[ ]]]")]
+        mask: Option<PathBuf>,
     },
+}
+
+fn print_chat_report(report: &chat::ChatTokenizeReport) {
+    for (name, part) in [("train", report.train), ("val", report.val)] {
+        println!(
+            "{name}: {} conversations, {} tokens, {} trained | rejected {} | left out {}",
+            part.shard.conversations,
+            part.shard.tokens,
+            part.shard.trained_tokens,
+            part.read.rejected,
+            part.read.left_out
+        );
+    }
 }
 
 fn run(cli: Cli) -> Result<(), Error> {
@@ -106,6 +145,16 @@ fn run(cli: Cli) -> Result<(), Error> {
                     part.read.invalid_utf8_lines
                 );
             }
+        }
+        Command::TokenizeChat {
+            tokenizer,
+            train,
+            val,
+            keep,
+            out_dir,
+        } => {
+            let report = chat::tokenize_chat(&tokenizer, train, val, &keep, &out_dir)?;
+            print_chat_report(&report);
         }
         Command::Sample {
             input,
@@ -156,8 +205,13 @@ fn run(cli: Cli) -> Result<(), Error> {
             tokenizer,
             shard,
             tokens,
+            mask,
         } => {
-            println!("{}", commands::peek(&tokenizer, &shard, tokens)?);
+            let text = match mask {
+                Some(mask) => chat::peek_masked(&tokenizer, &shard, &mask, tokens)?,
+                None => commands::peek(&tokenizer, &shard, tokens)?,
+            };
+            println!("{text}");
         }
     }
     Ok(())
